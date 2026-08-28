@@ -57,45 +57,53 @@ def main():
             context.add_cookies(playwright_cookies)
 
         page = context.new_page()
-        print(f"Acessando feed principal de @{username}...")
+        print(f"Acessando feed de @{username}...")
 
         try:
             page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded", timeout=60000)
-            time.sleep(6)
+            time.sleep(5)
 
-            for _ in range(8):
-                page.mouse.wheel(0, 1000)
-                time.sleep(2)
+            # Coleta progressiva com ordenação estrita por posição visual
+            for scroll_step in range(6):
+                # Extrai links visíveis na ordem visual exata (top depois left)
+                raw_items = page.evaluate("""() => {
+                    const links = Array.from(document.querySelectorAll("a[href*='/p/'], a[href*='/reel/']"));
+                    return links.map(el => {
+                        const rect = el.getBoundingClientRect();
+                        const isPinned = !!el.querySelector("svg[aria-label*='Pin'], svg[aria-label*='Fixado'], svg[title*='Pin'], svg[title*='Fixado']");
+                        return {
+                            href: el.getAttribute('href'),
+                            top: rect.top + window.scrollY,
+                            left: rect.left,
+                            isPinned: isPinned
+                        };
+                    });
+                }""")
 
-            elements = page.query_selector_all("a[href*='/p/'], a[href*='/reel/']")
-            
-            for el in elements:
-                is_pinned = False
-                try:
-                    pin_elem = el.query_selector("svg[aria-label*='Pin'], svg[aria-label*='Fixado'], svg[title*='Pin'], svg[title*='Fixado']")
-                    if pin_elem:
-                        is_pinned = True
-                except Exception:
-                    pass
+                # Ordena pela posição vertical e horizontal
+                raw_items.sort(key=lambda x: (x['top'], x['left']))
 
-                if is_pinned:
-                    print("📌 Post fixado ignorado.")
-                    continue
+                for item in raw_items:
+                    if item.get("isPinned"):
+                        continue
+                    href = item.get("href")
+                    if href:
+                        full_url = f"https://www.instagram.com{href}" if href.startswith("/") else href
+                        clean_url = full_url.split("?")[0]
+                        if clean_url not in posts_urls:
+                            posts_urls.append(clean_url)
 
-                href = el.get_attribute("href")
-                if href:
-                    full_url = f"https://www.instagram.com{href}" if href.startswith("/") else href
-                    clean_url = full_url.split("?")[0]
-                    if clean_url not in posts_urls:
-                        posts_urls.append(clean_url)
-                
                 if len(posts_urls) >= target_count:
                     break
+
+                page.mouse.wheel(0, 800)
+                time.sleep(2)
 
         except Exception as e:
             print(f"Aviso durante navegação inicial: {e}")
 
-        print(f"\nTotal de posts localizados: {len(posts_urls)}")
+        posts_urls = posts_urls[:target_count]
+        print(f"\nTotal de posts cronológicos identificados: {len(posts_urls)}")
 
         if not posts_urls:
             print("❌ Nenhum post foi identificado.")
@@ -105,8 +113,8 @@ def main():
         posts_data = []
         allowed_files = []
 
-        for idx, post_url in enumerate(posts_urls[:target_count], start=1):
-            print(f"\n--- Processando Post #{idx}: {post_url} ---")
+        for idx, post_url in enumerate(posts_urls, start=1):
+            print(f"\n--- Processando Post #{idx} (Ordem Cronológica): {post_url} ---")
             is_video = "/reel/" in post_url
             caption = ""
             image_download_url = ""
@@ -115,12 +123,12 @@ def main():
                 page.goto(post_url, wait_until="domcontentloaded", timeout=30000)
                 time.sleep(3)
 
-                # Captura a legenda real do post
+                # Captura da legenda real
                 caption_elem = page.query_selector("h1, div[class*='_a9zs'], span[class*='_aacl']")
                 if caption_elem:
                     caption = caption_elem.inner_text().strip()
 
-                # Verifica se há tag de vídeo
+                # Verifica se há vídeo ou imagem
                 video_elem = page.query_selector("video")
                 if video_elem:
                     is_video = True
@@ -191,7 +199,6 @@ def main():
                         print(f"Erro ao baixar imagem via URL direta: {e}")
 
                 if not downloaded:
-                    # Fallback com screenshot da imagem na tela
                     try:
                         img_node = page.query_selector("article img, img[style*='object-fit']")
                         if img_node:
@@ -219,7 +226,7 @@ def main():
     if os.path.exists(cookie_file):
         os.remove(cookie_file)
 
-    print("\n✅ Concluído! 12 posts (vídeos e imagens com legendas reais) salvos com sucesso.")
+    print("\n✅ Concluído! 12 posts estritamente cronológicos organizados com sucesso.")
 
 if __name__ == "__main__":
     main()
