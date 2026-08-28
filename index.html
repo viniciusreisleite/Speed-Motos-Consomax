@@ -150,7 +150,7 @@
     <!-- Coluna de Mídia -->
     <div class="media-section">
       <video id="player" autoplay playsinline muted style="display: none;"></video>
-      <img id="image-display" alt="Foto do Post" style="display: none;">
+      <img id="image-display" alt="Foto do Post" style="display: none;" onerror="this.style.display='none'">
       
       <div class="progress-bar-container">
         <div class="progress-bar" id="progress"></div>
@@ -219,14 +219,11 @@
       captionText.style.lineHeight = (optimal * 1.35) + 'px';
     }
 
-    // Tratamento de falhas apenas quando estiver em modo de vídeo ativo
     player.addEventListener('error', () => {
       if (!isVideoMode || !player.src) return;
       consecutiveErrors++;
       if (consecutiveErrors >= maxConsecutiveErrors) {
-        setTimeout(() => {
-          window.location.reload();
-        }, 3000);
+        setTimeout(() => { window.location.reload(); }, 3000);
       } else {
         setTimeout(() => {
           player.load();
@@ -246,7 +243,6 @@
         const posts = await res.json();
         
         const currentPost = posts.find(p => p.id === postId) || posts[0];
-        
         if (!currentPost) return;
 
         captionText.innerText = currentPost.caption || 'Speed Motos Consomax';
@@ -255,7 +251,7 @@
           autoFitTextExact();
         });
 
-        const file = currentPost.media_file || currentPost.video_file || '';
+        const file = currentPost.media_file || '';
         const isVid = currentPost.type === 'video' || file.endsWith('.mp4');
 
         if (isVid) {
