@@ -3,6 +3,7 @@ import glob
 import json
 import subprocess
 import time
+import urllib.request
 from playwright.sync_api import sync_playwright
 
 def cleanup_old_media(allowed_files):
@@ -56,7 +57,7 @@ def main():
             context.add_cookies(playwright_cookies)
 
         page = context.new_page()
-        print(f"Acessando feed de @{username}...")
+        print(f"Acessando feed principal de @{username}...")
 
         try:
             page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded", timeout=60000)
@@ -92,141 +93,123 @@ def main():
                     break
 
         except Exception as e:
-            print(f"Aviso durante navegação: {e}")
+            print(f"Aviso durante navegação inicial: {e}")
+
+        print(f"\nTotal de posts localizados: {len(posts_urls)}")
+
+        if not posts_urls:
+            print("❌ Nenhum post foi identificado.")
+            browser.close()
+            return
+
+        posts_data = []
+        allowed_files = []
+
+        for idx, post_url in enumerate(posts_urls[:target_count], start=1):
+            print(f"\n--- Processando Post #{idx}: {post_url} ---")
+            is_video = "/reel/" in post_url
+            caption = ""
+            image_download_url = ""
+
+            try:
+                page.goto(post_url, wait_until="domcontentloaded", timeout=30000)
+                time.sleep(3)
+
+                # Captura a legenda real do post
+                caption_elem = page.query_selector("h1, div[class*='_a9zs'], span[class*='_aacl']")
+                if caption_elem:
+                    caption = caption_elem.inner_text().strip()
+
+                # Verifica se há tag de vídeo
+                video_elem = page.query_selector("video")
+                if video_elem:
+                    is_video = True
+                elif not is_video:
+                    img_elem = page.query_selector("article img, div[role='dialog'] img, img[style*='object-fit']")
+                    if img_elem:
+                        image_download_url = img_elem.get_attribute("src") or ""
+
+            except Exception as e:
+                print(f"Aviso ao inspecionar post #{idx}: {e}")
+
+            if is_video:
+                output_filename = f"media_{idx}.mp4"
+                temp_raw = f"temp_raw_{idx}.mp4"
+                allowed_files.append(output_filename)
+
+                cmd_download = [
+                    "yt-dlp",
+                    "--cookies", cookie_file,
+                    "--no-check-certificates",
+                    "-f", "bestvideo+bestaudio/best",
+                    "-o", temp_raw,
+                    "--force-overwrites",
+                    post_url
+                ]
+                subprocess.run(cmd_download, capture_output=True, text=True)
+
+                if os.path.exists(temp_raw):
+                    cmd_ffmpeg = [
+                        "ffmpeg", "-y",
+                        "-i", temp_raw,
+                        "-vf", "scale='min(720,iw)':-2",
+                        "-c:v", "libx264",
+                        "-crf", "26",
+                        "-preset", "veryfast",
+                        "-c:a", "aac",
+                        "-b:a", "96k",
+                        "-movflags", "+faststart",
+                        output_filename
+                    ]
+                    subprocess.run(cmd_ffmpeg, capture_output=True, text=True)
+                    try:
+                        os.remove(temp_raw)
+                    except Exception:
+                        pass
+
+                posts_data.append({
+                    "id": idx,
+                    "type": "video",
+                    "url": post_url,
+                    "media_file": output_filename,
+                    "caption": caption if caption else "Speed Motos Consomax - As melhores motos e condições exclusivas!",
+                    "updated_at": time.strftime("%d/%m/%Y às %H:%M")
+                })
+
+            else:
+                output_filename = f"media_{idx}.jpg"
+                allowed_files.append(output_filename)
+
+                downloaded = False
+                if image_download_url:
+                    try:
+                        req = urllib.request.Request(image_download_url, headers={'User-Agent': 'Mozilla/5.0'})
+                        with urllib.request.urlopen(req, timeout=20) as response, open(output_filename, 'wb') as out_file:
+                            out_file.write(response.read())
+                        downloaded = True
+                    except Exception as e:
+                        print(f"Erro ao baixar imagem via URL direta: {e}")
+
+                if not downloaded:
+                    # Fallback com screenshot da imagem na tela
+                    try:
+                        img_node = page.query_selector("article img, img[style*='object-fit']")
+                        if img_node:
+                            img_node.screenshot(path=output_filename)
+                            downloaded = True
+                    except Exception as e:
+                        print(f"Erro ao capturar screenshot da imagem: {e}")
+
+                posts_data.append({
+                    "id": idx,
+                    "type": "image",
+                    "url": post_url,
+                    "media_file": output_filename,
+                    "caption": caption if caption else "Speed Motos Consomax - Realize seu sonho sobre duas rodas!",
+                    "updated_at": time.strftime("%d/%m/%Y às %H:%M")
+                })
 
         browser.close()
-
-    print(f"\nTotal de posts cronológicos localizados: {len(posts_urls)}")
-
-    if not posts_urls:
-        print("❌ Nenhum post foi identificado.")
-        return
-
-    posts_data = []
-    allowed_files = []
-
-    for idx, post_url in enumerate(posts_urls[:target_count], start=1):
-        print(f"\n--- Processando Post #{idx}: {post_url} ---")
-        
-        caption = ""
-        is_video = False
-        
-        # 1. Obter metadados via yt-dlp
-        try:
-            desc_cmd = [
-                "yt-dlp",
-                "--cookies", cookie_file,
-                "--no-check-certificates",
-                "--dump-json",
-                post_url
-            ]
-            info_res = subprocess.run(desc_cmd, capture_output=True, text=True)
-            if info_res.stdout:
-                info_json = json.loads(info_res.stdout)
-                caption = info_json.get("description") or info_json.get("title") or ""
-                
-                # Checa se possui stream de vídeo
-                if info_json.get("vcodec") and info_json.get("vcodec") != "none":
-                    is_video = True
-                elif info_json.get("formats"):
-                    for fmt in info_json.get("formats", []):
-                        if fmt.get("vcodec") and fmt.get("vcodec") != "none":
-                            is_video = True
-                            break
-        except Exception as e:
-            print(f"Erro ao extrair metadados: {e}")
-
-        if is_video:
-            output_filename = f"media_{idx}.mp4"
-            temp_raw = f"temp_raw_{idx}.mp4"
-            allowed_files.append(output_filename)
-
-            # Baixa vídeo
-            cmd_download = [
-                "yt-dlp",
-                "--cookies", cookie_file,
-                "--no-check-certificates",
-                "-f", "bestvideo+bestaudio/best",
-                "-o", temp_raw,
-                "--force-overwrites",
-                post_url
-            ]
-            subprocess.run(cmd_download, capture_output=True, text=True)
-
-            # Comprime em 720p H.264
-            if os.path.exists(temp_raw):
-                cmd_ffmpeg = [
-                    "ffmpeg", "-y",
-                    "-i", temp_raw,
-                    "-vf", "scale='min(720,iw)':-2",
-                    "-c:v", "libx264",
-                    "-crf", "26",
-                    "-preset", "veryfast",
-                    "-c:a", "aac",
-                    "-b:a", "96k",
-                    "-movflags", "+faststart",
-                    output_filename
-                ]
-                subprocess.run(cmd_ffmpeg, capture_output=True, text=True)
-                try:
-                    os.remove(temp_raw)
-                except Exception:
-                    pass
-
-            posts_data.append({
-                "id": idx,
-                "type": "video",
-                "url": post_url,
-                "media_file": output_filename,
-                "caption": caption.strip() if caption else "Speed Motos Consomax - Acelere seu sonho sobre duas rodas!",
-                "updated_at": time.strftime("%d/%m/%Y às %H:%M")
-            })
-
-        else:
-            # Baixa e converte imagem para JPG
-            output_filename = f"media_{idx}.jpg"
-            temp_thumb = f"temp_thumb_{idx}"
-            allowed_files.append(output_filename)
-
-            cmd_thumb = [
-                "yt-dlp",
-                "--cookies", cookie_file,
-                "--no-check-certificates",
-                "--write-thumbnail",
-                "--skip-download",
-                "-o", temp_thumb,
-                "--force-overwrites",
-                post_url
-            ]
-            subprocess.run(cmd_thumb, capture_output=True, text=True)
-
-            # Converte a thumbnail gerada (independente se veio webp, png ou jpg) para jpg padrão
-            found_thumb = None
-            for f in glob.glob(f"{temp_thumb}.*"):
-                found_thumb = f
-                break
-
-            if found_thumb and os.path.exists(found_thumb):
-                cmd_conv = [
-                    "ffmpeg", "-y",
-                    "-i", found_thumb,
-                    "-q:v", "2",
-                    output_filename
-                ]
-                subprocess.run(cmd_conv, capture_output=True, text=True)
-                try:
-                    os.remove(found_thumb)
-                except Exception:
-                    pass
-
-            posts_data.append({
-                "id": idx,
-                "type": "image",
-                "url": post_url,
-                "media_file": output_filename,
-                "caption": caption.strip() if caption else "Speed Motos Consomax - As melhores motos e condições exclusivas!",
-                "updated_at": time.strftime("%d/%m/%Y às %H:%M")
-            })
 
     cleanup_old_media(allowed_files)
 
@@ -236,7 +219,7 @@ def main():
     if os.path.exists(cookie_file):
         os.remove(cookie_file)
 
-    print("\n✅ Concluído! 12 posts (vídeos e fotos) baixados e organizados com sucesso.")
+    print("\n✅ Concluído! 12 posts (vídeos e imagens com legendas reais) salvos com sucesso.")
 
 if __name__ == "__main__":
     main()
