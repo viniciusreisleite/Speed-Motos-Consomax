@@ -3,11 +3,10 @@ import glob
 import json
 import subprocess
 import time
-import urllib.request
 from playwright.sync_api import sync_playwright
 
 def cleanup_old_media(allowed_files):
-    """Remove arquivos antigos de mídia que não estão entre os 12 ativos"""
+    """Remove arquivos antigos de mídia que não estão na lista dos 12 ativos"""
     for file_path in glob.glob("media_*.*") + glob.glob("video_*.mp4"):
         if file_path not in allowed_files:
             try:
@@ -57,13 +56,12 @@ def main():
             context.add_cookies(playwright_cookies)
 
         page = context.new_page()
-        print(f"Acessando feed principal de @{username}...")
+        print(f"Acessando feed de @{username}...")
 
         try:
             page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded", timeout=60000)
             time.sleep(6)
 
-            # Rola para carregar o feed
             for _ in range(8):
                 page.mouse.wheel(0, 1000)
                 time.sleep(2)
@@ -71,7 +69,6 @@ def main():
             elements = page.query_selector_all("a[href*='/p/'], a[href*='/reel/']")
             
             for el in elements:
-                # Verifica se é fixado
                 is_pinned = False
                 try:
                     pin_elem = el.query_selector("svg[aria-label*='Pin'], svg[aria-label*='Fixado'], svg[title*='Pin'], svg[title*='Fixado']")
@@ -113,9 +110,8 @@ def main():
         
         caption = ""
         is_video = False
-        media_url = ""
         
-        # Obtém metadados via yt-dlp
+        # 1. Obter metadados via yt-dlp
         try:
             desc_cmd = [
                 "yt-dlp",
@@ -129,7 +125,7 @@ def main():
                 info_json = json.loads(info_res.stdout)
                 caption = info_json.get("description") or info_json.get("title") or ""
                 
-                # Checa se possui vídeo
+                # Checa se possui stream de vídeo
                 if info_json.get("vcodec") and info_json.get("vcodec") != "none":
                     is_video = True
                 elif info_json.get("formats"):
@@ -137,10 +133,6 @@ def main():
                         if fmt.get("vcodec") and fmt.get("vcodec") != "none":
                             is_video = True
                             break
-                
-                # Se for imagem, pega o thumbnail de maior resolução
-                if not is_video:
-                    media_url = info_json.get("thumbnail") or ""
         except Exception as e:
             print(f"Erro ao extrair metadados: {e}")
 
@@ -149,7 +141,7 @@ def main():
             temp_raw = f"temp_raw_{idx}.mp4"
             allowed_files.append(output_filename)
 
-            # Baixa vídeo bruto
+            # Baixa vídeo
             cmd_download = [
                 "yt-dlp",
                 "--cookies", cookie_file,
@@ -191,31 +183,41 @@ def main():
             })
 
         else:
+            # Baixa e converte imagem para JPG
             output_filename = f"media_{idx}.jpg"
+            temp_thumb = f"temp_thumb_{idx}"
             allowed_files.append(output_filename)
 
-            # Baixa imagem do post
-            try:
-                cmd_thumb = [
-                    "yt-dlp",
-                    "--cookies", cookie_file,
-                    "--no-check-certificates",
-                    "--write-thumbnail",
-                    "--skip-download",
-                    "-o", f"media_{idx}",
-                    "--force-overwrites",
-                    post_url
+            cmd_thumb = [
+                "yt-dlp",
+                "--cookies", cookie_file,
+                "--no-check-certificates",
+                "--write-thumbnail",
+                "--skip-download",
+                "-o", temp_thumb,
+                "--force-overwrites",
+                post_url
+            ]
+            subprocess.run(cmd_thumb, capture_output=True, text=True)
+
+            # Converte a thumbnail gerada (independente se veio webp, png ou jpg) para jpg padrão
+            found_thumb = None
+            for f in glob.glob(f"{temp_thumb}.*"):
+                found_thumb = f
+                break
+
+            if found_thumb and os.path.exists(found_thumb):
+                cmd_conv = [
+                    "ffmpeg", "-y",
+                    "-i", found_thumb,
+                    "-q:v", "2",
+                    output_filename
                 ]
-                subprocess.run(cmd_thumb, capture_output=True, text=True)
-                
-                # Converte o thumbnail para jpg se necessário
-                for thumb_path in glob.glob(f"media_{idx}.*"):
-                    if not thumb_path.endswith(".mp4"):
-                        if thumb_path != output_filename:
-                            os.rename(thumb_path, output_filename)
-                        break
-            except Exception as e:
-                print(f"Erro ao baixar imagem: {e}")
+                subprocess.run(cmd_conv, capture_output=True, text=True)
+                try:
+                    os.remove(found_thumb)
+                except Exception:
+                    pass
 
             posts_data.append({
                 "id": idx,
