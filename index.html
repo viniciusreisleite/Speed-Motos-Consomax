@@ -28,11 +28,11 @@
       gap: 2.5vw;
     }
 
-    /* Coluna de Mídia (Vídeo ou Imagem) */
+    /* Coluna de Mídia */
     .media-section {
       flex: 0 0 35%;
       height: 100%;
-      background: #000;
+      background: #000000;
       border-radius: 26px;
       overflow: hidden;
       box-shadow: 0 20px 45px rgba(0, 0, 0, 0.9);
@@ -42,12 +42,13 @@
       position: relative;
       border: 2px solid rgba(239, 68, 68, 0.45);
     }
-    video, .image-display {
+    
+    #player, #image-display {
       width: 100%;
       height: 100%;
       object-fit: cover;
-      display: none;
     }
+    
     .progress-bar-container {
       position: absolute;
       bottom: 0;
@@ -148,8 +149,8 @@
   <div class="tv-container">
     <!-- Coluna de Mídia -->
     <div class="media-section">
-      <video id="player" autoplay playsinline muted preload="auto"></video>
-      <img id="image-display" class="image-display" alt="Imagem do Post">
+      <video id="player" autoplay playsinline muted style="display: none;"></video>
+      <img id="image-display" alt="Foto do Post" style="display: none;">
       
       <div class="progress-bar-container">
         <div class="progress-bar" id="progress"></div>
@@ -186,6 +187,7 @@
 
     let consecutiveErrors = 0;
     const maxConsecutiveErrors = 5;
+    let isVideoMode = false;
 
     function autoFitTextExact() {
       const containerW = captionContainer.clientWidth;
@@ -217,8 +219,9 @@
       captionText.style.lineHeight = (optimal * 1.35) + 'px';
     }
 
-    // Tratamento de falhas de vídeo
+    // Tratamento de falhas apenas quando estiver em modo de vídeo ativo
     player.addEventListener('error', () => {
+      if (!isVideoMode || !player.src) return;
       consecutiveErrors++;
       if (consecutiveErrors >= maxConsecutiveErrors) {
         setTimeout(() => {
@@ -244,26 +247,31 @@
         
         const currentPost = posts.find(p => p.id === postId) || posts[0];
         
-        captionText.innerText = currentPost.caption;
+        if (!currentPost) return;
+
+        captionText.innerText = currentPost.caption || 'Speed Motos Consomax';
 
         requestAnimationFrame(() => {
           autoFitTextExact();
         });
 
-        // Alterna entre Vídeo ou Imagem
-        if (currentPost.type === 'video' || (currentPost.media_file && currentPost.media_file.endsWith('.mp4'))) {
+        const file = currentPost.media_file || currentPost.video_file || '';
+        const isVid = currentPost.type === 'video' || file.endsWith('.mp4');
+
+        if (isVid) {
+          isVideoMode = true;
           imageDisplay.style.display = 'none';
           player.style.display = 'block';
-          player.src = `${currentPost.media_file}?t=${timestamp}`;
+          player.src = `${file}?t=${timestamp}`;
           player.load();
           player.play().catch(e => console.log('Autoplay:', e));
         } else {
+          isVideoMode = false;
           player.pause();
+          player.removeAttribute('src');
           player.style.display = 'none';
           imageDisplay.style.display = 'block';
-          imageDisplay.src = `${currentPost.media_file}?t=${timestamp}`;
-          
-          // Animação de progresso contínuo para imagens
+          imageDisplay.src = `${file}?t=${timestamp}`;
           progressBar.style.width = '100%';
         }
       } catch (e) {
