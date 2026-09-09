@@ -1,11 +1,14 @@
-﻿
-import os
+﻿import os
 import sys
 import time
 import json
 import requests
 from playwright.sync_api import sync_playwright
 
+PERFIS = ['speedmotos.consomax']
+PERFIL = 'speedmotos.consomax'
+BADGE_TEXTO = 'Speed Motos Consomax'
+COR_TEMA = '#ef4444'
 TOTAL_MIDIAS = 12
 COOKIES_FILE = "cookies.txt"
 
@@ -81,8 +84,8 @@ def main():
         page = ctx.new_page()
         
         urls = []
-        perfis = PERFIS if 'PERFIS' in globals() else [PERFIL]
-        for pf in perfis:
+        for pf in PERFIS:
+            print(f"\nChecando feed de @{pf}...")
             try:
                 page.goto(f"https://www.instagram.com/{pf}/", wait_until="domcontentloaded", timeout=60000)
                 page.wait_for_timeout(3000)
@@ -91,16 +94,18 @@ def main():
                     for a in anchors:
                         h = a.get_attribute("href")
                         if h:
-                            clean = "https://www.instagram.com/" + h.split("?")[0].strip("/") + "/"
-                            if clean not in urls: urls.append(clean)
+                            caminho = h.split("?")[0].strip("/")
+                            clean = f"https://www.instagram.com/{caminho}/"
+                            if clean not in urls:
+                                urls.append((clean, pf))
                     if len(urls) >= 15: break
                     page.evaluate("window.scrollBy(0, 1500)")
                     page.wait_for_timeout(1000)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Erro ao abrir perfil {pf}: {e}")
                 
         posts_a_manter = []
-        for url in urls:
+        for url, post_perfil in urls:
             raw_sc = url.strip("/").split("/")[-1]
             sc = raw_sc[:11] if len(raw_sc) > 11 and "_" not in raw_sc else raw_sc
             out_prefix = f"temp_{sc}"
@@ -120,12 +125,15 @@ def main():
                     "id": sc, "url": url, "caption": caption, "tipo": tipo,
                     "arquivo": arquivo, "media": arquivo, "media_file": arquivo,
                     "video_file": arquivo, "imagem": arquivo,
-                    "badge": BADGE_TEXTO, "cor": COR_TEMA, "perfil": PERFIL if 'PERFIL' in globals() else perfis[0]
+                    "badge": BADGE_TEXTO, "cor": COR_TEMA, "perfil": post_perfil
                 })
+                print(f"  [OK] Post {sc} ({tipo}) baixado de @{post_perfil}")
                 if len(posts_a_manter) >= TOTAL_MIDIAS: break
         browser.close()
 
-    if len(posts_a_manter) < 6: return
+    if len(posts_a_manter) < 6:
+        print(f"Poucas midias obtidas ({len(posts_a_manter)}). Mantendo grade atual.")
+        return
 
     json_final = []
     for idx, post in enumerate(posts_a_manter, 1):
@@ -142,6 +150,7 @@ def main():
 
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(json_final, f, indent=2, ensure_ascii=False)
+    print(f"Sucesso! {len(json_final)} midias salvas e data.json atualizado.")
 
 if __name__ == "__main__":
     main()
